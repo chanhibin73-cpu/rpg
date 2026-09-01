@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Territory RPG</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.2); }
+      50% { box-shadow: inset 0 0 50px rgba(239, 68, 68, 0.6); }
+    }
+    .bg-alert { animation: pulse-red 2s infinite; }
+  </style>
+</head>
+<body class="bg-black m-0 p-0 overflow-hidden">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- ストレージ管理ヘルパー ---
+    const StorageManager = {
+      setItem: (key, value) => {
+        try { localStorage.setItem(key, value); } 
+        catch (e) { document.cookie = `${key}=${encodeURIComponent(value)}; max-age=31536000; path=/`; }
+      },
+      getItem: (key) => {
+        try { const val = localStorage.getItem(key); if (val) return val; } catch (e) {}
+        const match = document.cookie.match(new RegExp('(^| )' + key + '=([^;]+)'));
+        if (match) return decodeURIComponent(match[2]);
+        return null;
+      }
+    };
+
+    // --- データ定義 ---
+    const AVATARS = ['😊', '😎', '🤠', '🥷', '🧙‍♂️', '🧛‍♂️', '🤖', '🐱'];
+    const MAX_LEVEL = 100;
+
+    const EXPLORE_DIRECTIONS = {
+      north: { name: '北', icon: 'fa-arrow-up', desc: '強敵が多いが経験値が豊富', expMult: 1.5, goldMult: 1.0, statMult: {hp: 1.2, atk: 1.2, def: 1.0, agi: 1.0} },
+      east: { name: '東', icon: 'fa-arrow-right', desc: '標準的な魔物が棲息する', expMult: 1.0, goldMult: 1.0, statMult: {hp: 1.0, atk: 1.0, def: 1.0, agi: 1.0} },
+      west: { name: '西', icon: 'fa-arrow-left', desc: '素早い敵が多く危険地帯', expMult: 1.2, goldMult: 1.2, statMult: {hp: 0.8, atk: 1.0, def: 1.0, agi: 1.5} },
+      south: { name: '南', icon: 'fa-arrow-down', desc: '硬い敵が多いが資金が潤沢', expMult: 1.0, goldMult: 1.5, statMult: {hp: 1.0, atk: 1.0, def: 1.5, agi: 0.8} }
+    };
+
+    // 初期勢力データ
+    const INITIAL_NATIONS = {
+      granbell: { id: 'granbell', name: 'グランベル王国', icon: '👑', color: 'border-yellow-500 bg-yellow-950/40 text-yellow-300', desc: '北東に君臨する伝統ある商業大国。豊かな交易路を所有。', relation: 'neutral', tradeLevel: 0, allianceCost: 1000, tradeCost: 500, power: 30, baseTerritory: 12 },
+      rune: { id: 'rune', name: 'ルーンフォレスト', icon: '🧝‍♀️', color: 'border-emerald-500 bg-emerald-950/40 text-emerald-300', desc: '南西の密林に広がる魔法国家。高水準な結界と防衛網を持つ。', relation: 'neutral', tradeLevel: 0, allianceCost: 1500, tradeCost: 600, power: 35, baseTerritory: 10 },
+      barzac: { id: 'barzac', name: 'バルザック帝国', icon: '⚔️', color: 'border-purple-500 bg-purple-950/40 text-purple-300', desc: '南東の荒野を統一した軍事国家。広い領土と屈強な兵を有する。', relation: 'neutral', tradeLevel: 0, allianceCost: 3000, tradeCost: 1000, power: 45, baseTerritory: 15 }
+    };
+
+    const INITIAL_ITEMS = {
+      weapon: { id: 'w_knife', name: '木のナイフ', type: 'weapon', atk: 1, def: 0, agi: 0, price: 50, desc: '初期装備のナイフ' },
+      armor: { id: 'a_jersey', name: 'ジャージ', type: 'armor', atk: 0, def: 1, agi: 0, price: 50, desc: '動きやすい服' },
+      shoes: { id: 's_shoes', name: '運動靴', type: 'shoes', atk: 0, def: 1, agi: 1, price: 50, desc: '普通の靴' }
+    };
+
+    const SHOP_ITEMS_MORNING = [
+      { id: 'i_potion', name: '傷薬', type: 'item', healHp: 50, healMp: 0, price: 50, desc: 'HPを50回復' },
+      { id: 'i_potion_hi', name: '上傷薬', type: 'item', healHp: 150, healMp: 0, price: 150, desc: 'HPを150回復' },
+      { id: 'i_ether', name: '魔法水', type: 'item', healHp: 0, healMp: 10, price: 100, desc: 'MPを10回復' },
+      { id: 'w_sword_iron', name: '鉄の剣', type: 'weapon', atk: 5, def: 0, agi: 0, price: 300, desc: '攻撃+5' },
+      { id: 'w_sword_steel', name: '鋼の剣', type: 'weapon', atk: 12, def: 0, agi: 0, price: 800, desc: '攻撃+12' },
+      { id: 'a_leather', name: '皮の鎧', type: 'armor', atk: 0, def: 5, agi: 0, price: 300, desc: '防御+5' },
+      { id: 's_leather', name: '革の靴', type: 'shoes', atk: 0, def: 1, agi: 3, price: 200, desc: '防御+1, 速さ+3' },
+    ];
+
+    const SHOP_ITEMS_AFTERNOON = [
+      { id: 'i_potion_hi', name: '上傷薬', type: 'item', healHp: 150, healMp: 0, price: 150, desc: 'HPを150回復' },
+      { id: 'i_potion_max', name: '特効薬', type: 'item', healHp: 400, healMp: 0, price: 400, desc: 'HPを400回復' },
+      { id: 'i_ether_hi', name: '聖水', type: 'item', healHp: 0, healMp: 30, price: 250, desc: 'MPを30回復' },
+      { id: 'w_axe_battle', name: '戦斧', type: 'weapon', atk: 18, def: 0, agi: -2, price: 1500, desc: '攻撃+18, 速さ-2' },
+      { id: 'a_chain', name: '鎖帷子', type: 'armor', atk: 0, def: 10, agi: -1, price: 750, desc: '防御+10, 速さ-1' },
+      { id: 'a_plate', name: 'プレートメイル', type: 'armor', atk: 0, def: 18, agi: -3, price: 1600, desc: '防御+18, 速さ-3' },
+      { id: 's_boots', name: '鉄のブーツ', type: 'shoes', atk: 0, def: 4, agi: -1, price: 400, desc: '防御+4, 速さ-1' },
+    ];
+
+    const SKILLS_DATA = {
+      'heavy_strike': { name: '強撃', type: 'attack', target: 'single', mpCost: 3, multiplier: 1.5, desc: '単体に1.5倍の物理攻撃' },
+      'double_slash': { name: '二連斬り', type: 'attack_multi', target: 'single', mpCost: 5, multiplier: 0.8, hits: 2, desc: '単体に0.8倍の2回連続攻撃' },
+      'whirlwind': { name: '旋風斬', type: 'attack', target: 'all', mpCost: 8, multiplier: 0.9, desc: '敵全体に0.9倍の物理攻撃' },
+      'fatal_blow': { name: '鬼神の一撃', type: 'attack', target: 'single', mpCost: 12, multiplier: 2.5, desc: '単体に2.5倍の強力な物理攻撃' },
+      'gigabreak': { name: 'ギガブレイク', type: 'attack', target: 'single', mpCost: 20, multiplier: 3.8, desc: '単体に3.8倍の究極物理攻撃' },
+      'meteor': { name: '隕石落とし', type: 'magic', target: 'all', mpCost: 25, multiplier: 2.2, desc: '敵全体に強力な破滅魔法' },
+      'god_thunder': { name: '創世神の雷', type: 'magic', target: 'all', mpCost: 40, multiplier: 5.0, desc: '全敵を滅ぼす神撃魔法' },
+      'heal_light': { name: '治癒', type: 'heal', target: 'self', mpCost: 5, healHp: 60, desc: 'HPを60回復' },
+      'heal_mid': { name: '中治癒', type: 'heal', target: 'self', mpCost: 12, healHp: 150, desc: 'HPを150回復' },
+      'heal_full': { name: '完全治癒', type: 'heal', target: 'self', mpCost: 25, healHp: 999, desc: 'HPを全回復' },
+      'fireball': { name: '火球', type: 'magic', target: 'single', mpCost: 6, multiplier: 1.8, desc: '単体に防御の影響を受けにくい魔法攻撃' },
+      'ice_lance': { name: '氷槍', type: 'magic', target: 'single', mpCost: 12, multiplier: 2.8, desc: '単体に強力な魔法攻撃' },
+      'fire_storm': { name: '炎の嵐', type: 'magic', target: 'all', mpCost: 18, multiplier: 1.5, desc: '敵全体に魔法攻撃' },
+    };
+
+    const BASE_SKILL_TREE = [
+      { id: 'hp_1', minLevel: 1, name: '体力強化I', desc: '最大HP+10', cost: 1, type: 'stat', stat: 'maxHp', val: 10, req: [] },
+      { id: 'mp_1', minLevel: 1, name: '魔力強化I', desc: '最大MP+5', cost: 2, type: 'stat', stat: 'maxMp', val: 5, req: [] },
+      { id: 'atk_1', minLevel: 1, name: '筋力強化I', desc: '攻撃+3', cost: 1, type: 'stat', stat: 'atk', val: 3, req: [] },
+      { id: 'def_1', minLevel: 1, name: '頑強I', desc: '防御+3', cost: 1, type: 'stat', stat: 'def', val: 3, req: [] },
+      { id: 'agi_1', minLevel: 1, name: '俊敏I', desc: '速さ+3', cost: 1, type: 'stat', stat: 'agi', val: 3, req: [] },
+      { id: 'skill_heavy', minLevel: 1, name: 'スキル: 強撃', desc: '単体物理 (MP3)', cost: 2, type: 'skill', skillId: 'heavy_strike', req: ['atk_1'] },
+      { id: 'skill_heal', minLevel: 1, name: 'スキル: 治癒', desc: 'HP60回復 (MP5)', cost: 2, type: 'skill', skillId: 'heal_light', req: ['hp_1'] },
+
+      { id: 'hp_2', minLevel: 10, name: '【Lv10】体力強化II', desc: '最大HP+25', cost: 2, type: 'stat', stat: 'maxHp', val: 25, req: ['hp_1'] },
+      { id: 'atk_2', minLevel: 10, name: '【Lv10】筋力強化II', desc: '攻撃+6', cost: 2, type: 'stat', stat: 'atk', val: 6, req: ['atk_1'] },
+      { id: 'def_2', minLevel: 10, name: '【Lv10】頑強II', desc: '防御+6', cost: 2, type: 'stat', stat: 'def', val: 6, req: ['def_1'] },
+      { id: 'skill_double', minLevel: 10, name: '【Lv10】スキル: 二連斬り', desc: '単体2回物理 (MP5)', cost: 4, type: 'skill', skillId: 'double_slash', req: ['skill_heavy'] },
+      { id: 'skill_fire', minLevel: 10, name: '【Lv10】スキル: 火球', desc: '単体魔法 (MP6)', cost: 3, type: 'skill', skillId: 'fireball', req: ['mp_1'] },
+
+      { id: 'mp_2', minLevel: 20, name: '【Lv20】魔力強化II', desc: '最大MP+12', cost: 4, type: 'stat', stat: 'maxMp', val: 12, req: ['mp_1'] },
+      { id: 'agi_2', minLevel: 20, name: '【Lv20】俊敏II', desc: '速さ+6', cost: 3, type: 'stat', stat: 'agi', val: 6, req: ['agi_1'] },
+      { id: 'skill_whirl', minLevel: 20, name: '【Lv20】スキル: 旋風斬', desc: '全体物理 (MP8)', cost: 5, type: 'skill', skillId: 'whirlwind', req: ['skill_double'] },
+      { id: 'skill_heal_m', minLevel: 20, name: '【Lv20】スキル: 中治癒', desc: 'HP150回復 (MP12)', cost: 4, type: 'skill', skillId: 'heal_mid', req: ['skill_heal'] },
+
+      { id: 'hp_3', minLevel: 30, name: '【Lv30】体力強化III', desc: '最大HP+50', cost: 3, type: 'stat', stat: 'maxHp', val: 50, req: ['hp_2'] },
+      { id: 'atk_3', minLevel: 30, name: '【Lv30】筋力強化III', desc: '攻撃+10', cost: 3, type: 'stat', stat: 'atk', val: 10, req: ['atk_2'] },
+      { id: 'skill_ice', minLevel: 30, name: '【Lv30】スキル: 氷槍', desc: '単体強力魔法 (MP12)', cost: 5, type: 'skill', skillId: 'ice_lance', req: ['skill_fire'] },
+
+      { id: 'def_3', minLevel: 40, name: '【Lv40】頑強III', desc: '防御+10', cost: 3, type: 'stat', stat: 'def', val: 10, req: ['def_2'] },
+      { id: 'skill_fatal', minLevel: 40, name: '【Lv40】スキル: 鬼神の一撃', desc: '単体強力物理 (MP12)', cost: 6, type: 'skill', skillId: 'fatal_blow', req: ['skill_whirl'] },
+
+      { id: 'mp_3', minLevel: 50, name: '【Lv50】魔力覚醒', desc: '最大MP+25', cost: 6, type: 'stat', stat: 'maxMp', val: 25, req: ['mp_2'] },
+      { id: 'skill_storm', minLevel: 50, name: '【Lv50】スキル: 炎の嵐', desc: '全体魔法 (MP18)', cost: 7, type: 'skill', skillId: 'fire_storm', req: ['skill_ice'] },
+
+      { id: 'stat_hero_1', minLevel: 60, name: '【Lv60】英雄の器', desc: '攻撃+15, 防御+15', cost: 7, type: 'stat', stat: 'atk', val: 15, req: ['atk_3'] },
+
+      { id: 'skill_giga', minLevel: 70, name: '【Lv70】スキル: ギガブレイク', desc: '単体極大物理 (MP20)', cost: 8, type: 'skill', skillId: 'gigabreak', req: ['skill_fatal'] },
+
+      { id: 'skill_meteor', minLevel: 80, name: '【Lv80】スキル: 隕石落とし', desc: '全体極大魔法 (MP25)', cost: 9, type: 'skill', skillId: 'meteor', req: ['skill_storm'] },
+
+      { id: 'skill_fullheal', minLevel: 90, name: '【Lv90】スキル: 完全治癒', desc: 'HP全回復 (MP25)', cost: 8, type: 'skill', skillId: 'heal_full', req: ['skill_heal_m'] },
+
+      { id: 'god_body', minLevel: 100, name: '【Lv100】神域の身体', desc: '最大HP+200, 最大MP+50', cost: 12, type: 'stat', stat: 'maxHp', val: 200, req: [] },
+      { id: 'skill_god', minLevel: 100, name: '【Lv100】スキル: 創世神の雷', desc: '全滅絶魔法 (MP40)', cost: 15, type: 'skill', skillId: 'god_thunder', req: [] },
+    ];
+
+    // ★固有スキルを定数から割合(stat_mult)に変更
+    const RANDOM_SKILLS_POOL = [
+      { id: 'rnd_hp_1', name: '【固有】巨人の血', desc: '最大HPが30%増加', cost: 6, type: 'stat_mult', stat: 'maxHp', val: 0.3, req: [] },
+      { id: 'rnd_mp_1', name: '【固有】大魔導の素質', desc: '最大MPが30%増加', cost: 7, type: 'stat_mult', stat: 'maxMp', val: 0.3, req: [] },
+      { id: 'rnd_atk_1', name: '【固有】剣豪の才能', desc: '攻撃力が20%増加', cost: 6, type: 'stat_mult', stat: 'atk', val: 0.2, req: [] },
+      { id: 'rnd_def_1', name: '【固有】鉄壁の皮膚', desc: '防御力が20%増加', cost: 6, type: 'stat_mult', stat: 'def', val: 0.2, req: [] },
+      { id: 'rnd_agi_1', name: '【固有】神速の足', desc: '速さが20%増加', cost: 6, type: 'stat_mult', stat: 'agi', val: 0.2, req: [] },
+      { id: 'rnd_luk_1', name: '【固有】天の加護', desc: '運が30%増加', cost: 5, type: 'stat_mult', stat: 'luk', val: 0.3, req: [] },
+    ];
+
+    const ENEMY_NAMES = ["スライム", "ゴブリン", "大コウモリ", "野生の狼", "オーク", "スケルトン", "リビングアーマー", "キメラ", "ドラゴンパピー", "魔王の幻影"];
+
+    const INFRA_OPTIONS = {
+      road: { id: 'road', name: '街道の整備', icon: 'fa-road', cost: 800, desc: '交易効率が向上し、毎ターンの貿易収入が+25%アップ' },
+      bridge: { id: 'bridge', name: '架橋工事', icon: 'fa-bridge', cost: 1500, desc: '川を越えての領土拡大が可能になり、貿易収入+35%アップ' },
+      fort: { id: 'fort', name: '防衛砦の建設', icon: 'fa-chess-rook', cost: 2000, desc: '防衛戦において自軍の防御力・攻撃力が20%上昇' }
+    };
+
+    const getMapSpiral = (max) => {
+      let x = 0, y = 0, dx = 0, dy = -1;
+      const coords = [];
+      for (let i = 0; i < max; i++) {
+        if (-11/2 < x && x <= 11/2 && -11/2 < y && y <= 11/2) coords.push({x, y});
+        if (x === y || (x < 0 && x === -y) || (x > 0 && x === 1 - y)) {
+          let temp = dx; dx = -dy; dy = temp;
+        }
+        x += dx; y += dy;
+      }
+      return coords;
+    };
+
+    const MAP_COORDS = getMapSpiral(121);
+    const RIVER_POSITIONS = [2, 13, 24, 35, 46, 57, 68, 79, 90, 101, 112];
+    
+    const NATION_TERRITORIES = {
+      granbell: [7, 8, 9, 18, 19, 20, 29, 30, 31, 41, 42],
+      rune: [77, 78, 88, 89, 90, 99, 100, 101, 110, 111],
+      barzac: [84, 85, 86, 95, 96, 97, 106, 107, 108, 117, 118, 119, 120]
+    };
+
+    const generateId = () => Math.random().toString(36).substr(2, 9);
+    const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const getSaveKey = (slot) => `territory_rpg_save_slot_${slot}`;
+
+    const getRandomElements = (arr, n) => {
+      let result = new Array(n), len = arr.length, taken = new Array(len);
+      if (n > len) throw new RangeError("getRandomElements: more elements taken than available");
+      while (n--) {
+        let x = Math.floor(Math.random() * len);
+        result[n] = arr[x in taken ? taken[x] : x];
+        taken[x] = --len in taken ? taken[len] : len;
+      }
+      return result;
+    };
+
+    function App() {
+      const [gameState, setGameState] = useState('title');
+      const [currentSlot, setCurrentSlot] = useState(1);
+      const [toastMsg, setToastMsg] = useState(null);
+      const [player, setPlayer] = useState(null);
+      const [battle, setBattle] = useState(null);
+      const [selectedItem, setSelectedItem] = useState(null);
+      const [createData, setCreateData] = useState({ name: '', avatar: AVATARS[0] });
+      const [showExploreModal, setShowExploreModal] = useState(false);
+      const [shopTab, setShopTab] = useState('buy');
+
+      const logsEndRef = useRef(null);
+
+      useEffect(() => {
+        if (toastMsg) {
+          const timer = setTimeout(() => setToastMsg(null), 2500);
+          return () => clearTimeout(timer);
+        }
+      }, [toastMsg]);
+
+      useEffect(() => {
+        if (gameState === 'battle' && logsEndRef.current) {
+          logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+      }, [battle?.logs]);
+
+      const showToast = (msg) => setToastMsg(msg);
+
+      const persistSave = (slotNum, playerData) => {
+        if (!playerData) return;
+        const now = new Date();
+        const timeStr = `${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const saveObj = { ...playerData, lastSave: timeStr };
+        StorageManager.setItem(getSaveKey(slotNum), JSON.stringify(saveObj));
+        return saveObj;
+      };
+
+      const getFullSkillTree = (currentPlayer) => {
+        if (!currentPlayer) return BASE_SKILL_TREE;
+        const pLevel = currentPlayer.level || 1;
+        const baseUnlocked = BASE_SKILL_TREE.filter(node => node.minLevel <= pLevel);
+        const personal = currentPlayer.personalSkillTree || [];
+        return [...baseUnlocked, ...personal];
+      };
+
+      // ★ステータス計算（装備・定数スキルを加算後、割合スキルを掛け合わせる）
+      const getStats = (currentPlayer = player) => {
+        if (!currentPlayer) return null;
+        let stats = { ...currentPlayer.baseStats };
+        let mults = { maxHp: 1, maxMp: 1, atk: 1, def: 1, agi: 1, luk: 1 };
+        
+        const fullTree = getFullSkillTree(currentPlayer);
+
+        currentPlayer.unlockedNodes.forEach(nodeId => {
+          const node = fullTree.find(n => n.id === nodeId);
+          if (node) {
+            if (node.type === 'stat') {
+              stats[node.stat] += node.val;
+            } else if (node.type === 'stat_mult') {
+              mults[node.stat] += node.val;
+            }
+          }
+        });
+        
+        ['weapon', 'armor', 'shoes'].forEach(slot => {
+          const eq = currentPlayer.equipment[slot];
+          if (eq) {
+            stats.atk += eq.atk || 0;
+            stats.def += eq.def || 0;
+            stats.agi += eq.agi || 0;
+          }
+        });
+
+        // 割合適用 (基礎値＋固定値＋装備) * (1 + 増加割合)
+        stats.maxHp = Math.floor(stats.maxHp * mults.maxHp);
+        stats.maxMp = Math.floor(stats.maxMp * mults.maxMp);
+        stats.atk = Math.floor(stats.atk * mults.atk);
+        stats.def = Math.floor(stats.def * mults.def);
+        stats.agi = Math.floor(stats.agi * mults.agi);
+        stats.luk = Math.floor(stats.luk * mults.luk);
+
+        return stats;
+      };
+
+      const processTurnIncomeAndInvasion = (currentPlayer) => {
+        let updatedPlayer = { ...currentPlayer };
+        
+        let infraMultiplier = 1.0;
+        if (updatedPlayer.infra?.road) infraMultiplier += 0.25;
+        if (updatedPlayer.infra?.bridge) infraMultiplier += 0.35;
+
+        let tradeIncome = 0;
+        Object.values(updatedPlayer.nations || {}).forEach(n => {
+          if (n.tradeLevel > 0) {
+            tradeIncome += Math.floor((n.tradeLevel * 60 + updatedPlayer.territory * 12) * infraMultiplier);
+          }
+        });
+
+        if (tradeIncome > 0) {
+          updatedPlayer.gold += tradeIncome;
+          showToast(`貿易・領土収入として ${tradeIncome}G 獲得！`);
+        }
+
+        if (updatedPlayer.territory > 0 && !updatedPlayer.underAttack) {
+          let invasionChance = 22;
+          if (updatedPlayer.infra?.fort) invasionChance -= 7;
+          
+          if (randomInt(1, 100) <= invasionChance) {
+            updatedPlayer.underAttack = true;
+          }
+        }
+        return updatedPlayer;
+      };
+
+      const initGame = () => {
+        if (!createData.name.trim()) return showToast('名前を入力してください');
+
+        const baseStats = { maxHp: randomInt(50, 100), maxMp: randomInt(5, 15), atk: randomInt(10, 15), def: randomInt(5, 10), agi: randomInt(5, 10), luk: randomInt(1, 10) };
+        const w = { ...INITIAL_ITEMS.weapon, uid: generateId() };
+        const a = { ...INITIAL_ITEMS.armor, uid: generateId() };
+        const s = { ...INITIAL_ITEMS.shoes, uid: generateId() };
+
+        const personalSkills = getRandomElements(RANDOM_SKILLS_POOL, 2);
+
+        const newPlayerData = {
+          name: createData.name, avatar: createData.avatar, level: 1, exp: 0, gold: 1000, sp: 10, territory: 1,
+          baseStats, hp: baseStats.maxHp, mp: baseStats.maxMp, equipment: { weapon: w, armor: a, shoes: s },
+          inventory: [w, a, s], skills: [], unlockedNodes: [], personalSkillTree: personalSkills,
+          infra: { road: false, bridge: false, fort: false },
+          underAttack: false, nations: JSON.parse(JSON.stringify(INITIAL_NATIONS)), lastSave: null
+        };
+
+        // 初期HP・MPを割合計算込みのMaxにする
+        const initialStats = getStats(newPlayerData);
+        newPlayerData.hp = initialStats.maxHp;
+        newPlayerData.mp = initialStats.maxMp;
+
+        const savedData = persistSave(currentSlot, newPlayerData);
+        setPlayer(savedData);
+        setGameState('main');
+        showToast(`スロット${currentSlot}で開始＆セーブしました！`);
+      };
+
+      const saveGameToSlot = (slotNum) => {
+        if (!player) return;
+        const savedData = persistSave(slotNum, player);
+        setPlayer(savedData);
+        setCurrentSlot(slotNum);
+        showToast(`スロット${slotNum}にセーブしました`);
+        setGameState('main');
+      };
+
+      const loadGameFromSlot = (slotNum) => {
+        const data = StorageManager.getItem(getSaveKey(slotNum));
+        if (data) { 
+          try {
+            const parsed = JSON.parse(data);
+            if (!parsed.nations) parsed.nations = JSON.parse(JSON.stringify(INITIAL_NATIONS));
+            if (!parsed.personalSkillTree) parsed.personalSkillTree = [];
+            if (!parsed.infra) parsed.infra = { road: false, bridge: false, fort: false };
+            setPlayer(parsed); 
+            setCurrentSlot(slotNum);
+            setGameState('main'); 
+            showToast(`スロット${slotNum}をロードしました`); 
+          } catch(e) {
+            showToast('データのロードに失敗しました');
+          }
+        } else {
+          showToast('セーブデータがありません');
+        }
+      };
+
+      const getSaveDataInfo = (slotNum) => {
+        const data = StorageManager.getItem(getSaveKey(slotNum));
+        if (data) {
+          try {
+            const parsed = JSON.parse(data);
+            return { exists: true, name: parsed.name, level: parsed.level, territory: parsed.territory, time: parsed.lastSave };
+          } catch(e) {}
+        }
+        return { exists: false };
+      };
+
+      const isMerchantAvailable = () => {
+        const hour = new Date().getHours();
+        return hour >= 7 && hour <= 23;
+      };
+
+      const getCurrentShopItems = () => {
+        const hour = new Date().getHours();
+        return hour < 12 ? SHOP_ITEMS_MORNING : SHOP_ITEMS_AFTERNOON;
+      };
+
+      const handleShopClick = () => {
+        if (player.underAttack) return;
+        if (isMerchantAvailable()) {
+          setShopTab('buy');
+          setGameState('shop');
+        } else {
+          showToast('今は商人がいないようだ...(営業: 7時~23時)');
+        }
+      };
+
+      const buyItem = (item) => {
+        if (player.gold < item.price) return showToast('ゴールドが足りません');
+        let newInventory = [...player.inventory];
+        if (item.type === 'item') {
+          const existing = newInventory.find(i => i.id === item.id);
+          if (existing) existing.amount = (existing.amount || 1) + 1;
+          else newInventory.push({ ...item, uid: generateId(), amount: 1 });
+        } else {
+          newInventory.push({ ...item, uid: generateId() });
+        }
+        const newPlayer = { ...player, gold: player.gold - item.price, inventory: newInventory };
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${item.name}を購入しました`);
+      };
+
+      const sellItem = (item) => {
+        const isEquipped = Object.values(player.equipment).some(eq => eq?.uid === item.uid);
+        if (isEquipped) return showToast('装備中のアイテムは売却できません');
+
+        const sellPrice = Math.floor((item.price || 20) / 2);
+        let newInventory = [...player.inventory];
+
+        if (item.type === 'item') {
+          const idx = newInventory.findIndex(i => i.uid === item.uid);
+          if (idx !== -1) {
+            if (newInventory[idx].amount > 1) {
+              newInventory[idx].amount -= 1;
+            } else {
+              newInventory.splice(idx, 1);
+            }
+          }
+        } else {
+          const idx = newInventory.findIndex(i => i.uid === item.uid);
+          if (idx !== -1) {
+            newInventory.splice(idx, 1);
+          }
+        }
+
+        const newPlayer = { ...player, gold: player.gold + sellPrice, inventory: newInventory };
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${item.name}を ${sellPrice}G で売却しました`);
+      };
+
+      const buildInfra = (infraKey) => {
+        const targetInfra = INFRA_OPTIONS[infraKey];
+        if (player.gold < targetInfra.cost) return showToast('ゴールドが足りません');
+        if (player.infra?.[infraKey]) return showToast('すでに整備・建設済みです');
+
+        let newPlayer = { ...player, gold: player.gold - targetInfra.cost };
+        newPlayer.infra[infraKey] = true;
+        
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`【整備完了】${targetInfra.name} を完了しました！`);
+      };
+
+      const handleAlliance = (nationId) => {
+        const nation = player.nations[nationId];
+        if (player.gold < nation.allianceCost) return showToast('ゴールドが足りません');
+        
+        let newPlayer = { ...player, gold: player.gold - nation.allianceCost };
+        newPlayer.nations[nationId].relation = 'allied';
+        
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${nation.name}と同盟を締結しました！`);
+      };
+
+      const handleTrade = (nationId) => {
+        const nation = player.nations[nationId];
+        const cost = nation.tradeCost * (nation.tradeLevel + 1);
+        if (player.gold < cost) return showToast('ゴールドが足りません');
+
+        let newPlayer = { ...player, gold: player.gold - cost };
+        newPlayer.nations[nationId].tradeLevel += 1;
+        
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${nation.name}との貿易レベルが ${newPlayer.nations[nationId].tradeLevel} に上がりました！`);
+      };
+
+      const startBattle = (type = 'explore', targetNationId = null, direction = null) => {
+        const isDefense = type === 'defense';
+        const isInvasion = type === 'invasion';
+        const dirData = direction ? EXPLORE_DIRECTIONS[direction] : null;
+        
+        let terriLevel = Math.max(1, Math.floor(player.territory / 2) + (isDefense ? 2 : 1));
+        if (isInvasion) {
+          terriLevel = Math.floor(player.nations[targetNationId].power / 2);
+        }
+
+        const maxEnemies = Math.min(3, Math.ceil(terriLevel / 3) + 1);
+        const enemyCount = randomInt(isDefense || isInvasion ? 2 : 1, maxEnemies);
+        
+        const generatedEnemies = [];
+        const nameCounts = {};
+        const enemyBaseLevel = Math.min(terriLevel - 1, ENEMY_NAMES.length - 1);
+
+        for(let i=0; i<enemyCount; i++) {
+          let baseName = ENEMY_NAMES[Math.max(0, enemyBaseLevel - randomInt(0, 2))] || "謎の魔物";
+          if (isInvasion) baseName = `${player.nations[targetNationId].name}兵`;
+          
+          nameCounts[baseName] = (nameCounts[baseName] || 0) + 1;
+          const statMultiplier = (enemyCount > 1 ? 0.8 : 1.0) * (isDefense || isInvasion ? 1.2 : 1.0);
+          
+          const hpMult = statMultiplier * (dirData ? dirData.statMult.hp : 1.0);
+          const atkMult = statMultiplier * (dirData ? dirData.statMult.atk : 1.0);
+          const defMult = statMultiplier * (dirData ? dirData.statMult.def : 1.0);
+          const agiMult = (dirData ? dirData.statMult.agi : 1.0);
+          const expBonus = statMultiplier * (dirData ? dirData.expMult : 1.0);
+          const goldBonus = statMultiplier * (dirData ? dirData.goldMult : 1.0);
+
+          const maxHp = Math.floor(randomInt(25 + terriLevel * 10, 45 + terriLevel * 15) * hpMult);
+          
+          generatedEnemies.push({
+            id: generateId(),
+            baseName,
+            level: terriLevel,
+            maxHp, hp: maxHp,
+            atk: Math.floor(randomInt(8 + terriLevel * 2, 12 + terriLevel * 4) * atkMult),
+            def: Math.floor(randomInt(2 + terriLevel * 2, 5 + terriLevel * 3) * defMult),
+            agi: Math.floor(randomInt(5 + terriLevel * 2, 10 + terriLevel * 3) * agiMult),
+            exp: Math.floor((18 + terriLevel * 8) * expBonus),
+            gold: Math.floor((35 + terriLevel * 12) * goldBonus)
+          });
+        }
+
+        const nameCurrent = {};
+        generatedEnemies.forEach(e => {
+          if (nameCounts[e.baseName] > 1) {
+            nameCurrent[e.baseName] = (nameCurrent[e.baseName] || 0) + 1;
+            e.name = `${e.baseName}${String.fromCharCode(64 + nameCurrent[e.baseName])}`;
+          } else {
+            e.name = e.baseName;
+          }
+        });
+
+        let allyHelp = null;
+        if (isDefense) {
+          const alliedNations = Object.values(player.nations).filter(n => n.relation === 'allied');
+          if (alliedNations.length > 0) allyHelp = alliedNations[randomInt(0, alliedNations.length - 1)];
+        }
+
+        const initialLogs = [];
+        if (isDefense) {
+          initialLogs.push(`敵軍が領土に攻め込んできた！防衛せよ！`);
+          if (player.infra?.fort) initialLogs.push(`防衛砦の効果発動！(全味方能力+20%)`);
+          if (allyHelp) initialLogs.push(`同盟国【${allyHelp.name}】の援軍が駆けつけた！(全味方能力+25%)`);
+        } else if (isInvasion) {
+          initialLogs.push(`【${player.nations[targetNationId].name}】へ侵攻を開始！`);
+        } else if (direction) {
+          initialLogs.push(`【${dirData.name}】の方向へ探索を開始！`);
+          initialLogs.push(`魔物が現れた！`);
+        } else {
+          initialLogs.push(`魔物が現れた！`);
+        }
+
+        setBattle({
+          isDefense, isInvasion, targetNationId, direction, allyHelp,
+          enemies: generatedEnemies, logs: initialLogs, isOver: false,
+          selectedTargetId: generatedEnemies[0].id
+        });
+        setGameState('battle');
+      };
+
+      const processTurn = (actionType, skillData = null, itemData = null) => {
+        if (battle.isOver) return;
+
+        let newPlayer = { ...player };
+        let newEnemies = battle.enemies.map(e => ({...e}));
+        let logs = [...battle.logs];
+        let stats = getStats(newPlayer);
+
+        let buffMultiplier = 1.0;
+        if (battle.allyHelp) buffMultiplier += 0.25;
+        if (battle.isDefense && newPlayer.infra?.fort) buffMultiplier += 0.20;
+
+        stats.atk = Math.floor(stats.atk * buffMultiplier);
+        stats.def = Math.floor(stats.def * buffMultiplier);
+
+        const addLog = (msg) => logs.push(msg);
+        let targetEnemy = newEnemies.find(e => e.id === battle.selectedTargetId && e.hp > 0) || newEnemies.find(e => e.hp > 0);
+
+        const actors = [
+          { isPlayer: true, agi: stats.agi },
+          ...newEnemies.filter(e => e.hp > 0).map(e => ({ isPlayer: false, id: e.id, agi: e.agi }))
+        ].sort((a, b) => b.agi - a.agi);
+
+        const calculateDamage = (attackerAtk, defenderDef, attackerLuk, multiplier = 1, isMagic = false) => {
+          const critChance = Math.min(50, attackerLuk * 1.5);
+          const isCrit = randomInt(1, 100) <= critChance;
+          const defFactor = isMagic ? Math.floor(defenderDef / 4) : Math.floor(defenderDef / 2);
+          let dmg = Math.max(1, Math.floor(attackerAtk * multiplier) - defFactor);
+          if (isCrit) dmg = Math.floor(dmg * 2);
+          return { dmg, isCrit };
+        };
+
+        let fled = false;
+
+        for (let actor of actors) {
+          if (newPlayer.hp <= 0) break;
+          if (newEnemies.every(e => e.hp <= 0)) break;
+
+          if (actor.isPlayer) {
+            if (actionType === 'flee') {
+              if (battle.isDefense) {
+                addLog('防衛戦からは逃げられない！領土を見捨てることになる！');
+                fled = true; break;
+              } else {
+                const avgAgi = newEnemies.reduce((sum, e) => sum + e.agi, 0) / newEnemies.length;
+                if (randomInt(1, 100) <= 50 + stats.agi - avgAgi) {
+                  addLog('逃げ出すことに成功した！');
+                  fled = true; break;
+                } else {
+                  addLog('逃げられなかった！');
+                }
+              }
+            } 
+            else if (actionType === 'attack') {
+              targetEnemy = newEnemies.find(e => e.id === battle.selectedTargetId && e.hp > 0) || newEnemies.find(e => e.hp > 0);
+              const { dmg, isCrit } = calculateDamage(stats.atk, targetEnemy.def, stats.luk);
+              targetEnemy.hp -= dmg;
+              addLog(`あなたの攻撃！ ${targetEnemy.name}に${dmg}ダメージ！${isCrit ? '(会心!)' : ''}`);
+            } 
+            else if (actionType === 'skill' && skillData) {
+              if (newPlayer.mp < skillData.mpCost) {
+                addLog(`MPが足りない！`);
+              } else {
+                newPlayer.mp -= skillData.mpCost;
+                if (skillData.target === 'all') {
+                  addLog(`${skillData.name}！`);
+                  newEnemies.filter(e => e.hp > 0).forEach(e => {
+                    const { dmg, isCrit } = calculateDamage(stats.atk, e.def, stats.luk, skillData.multiplier, skillData.type === 'magic');
+                    e.hp -= dmg;
+                    addLog(` -> ${e.name}に${dmg}ダメージ！${isCrit ? '(会心!)' : ''}`);
+                  });
+                } else if (skillData.type === 'heal') {
+                  newPlayer.hp = Math.min(stats.maxHp, newPlayer.hp + skillData.healHp);
+                  addLog(`${skillData.name}！ HPが回復した！`);
+                } else {
+                  targetEnemy = newEnemies.find(e => e.id === battle.selectedTargetId && e.hp > 0) || newEnemies.find(e => e.hp > 0);
+                  if (skillData.type === 'attack_multi') {
+                    addLog(`${skillData.name}！`);
+                    for (let i = 0; i < skillData.hits; i++) {
+                      if (targetEnemy.hp <= 0) break;
+                      const { dmg, isCrit } = calculateDamage(stats.atk, targetEnemy.def, stats.luk, skillData.multiplier);
+                      targetEnemy.hp -= dmg;
+                      addLog(` -> ${targetEnemy.name}に${dmg}ダメージ！${isCrit ? '(会心!)' : ''}`);
+                    }
+                  } else {
+                    const { dmg, isCrit } = calculateDamage(stats.atk, targetEnemy.def, stats.luk, skillData.multiplier, skillData.type === 'magic');
+                    targetEnemy.hp -= dmg;
+                    addLog(`${skillData.name}！ ${targetEnemy.name}に${dmg}ダメージ！${isCrit ? '(会心!)' : ''}`);
+                  }
+                }
+              }
+            } 
+            else if (actionType === 'item' && itemData) {
+              if (itemData.healHp) {
+                newPlayer.hp = Math.min(stats.maxHp, newPlayer.hp + itemData.healHp);
+                addLog(`${itemData.name}を使った！ HPが回復した！`);
+              }
+              if (itemData.healMp) {
+                newPlayer.mp = Math.min(stats.maxMp, newPlayer.mp + itemData.healMp);
+                addLog(`${itemData.name}を使った！ MPが回復した！`);
+              }
+            }
+
+          } else {
+            const enemy = newEnemies.find(e => e.id === actor.id);
+            if (enemy && enemy.hp > 0) {
+              const enemyLuk = Math.min(20, enemy.level * 2);
+              const { dmg, isCrit } = calculateDamage(enemy.atk, stats.def, enemyLuk);
+              newPlayer.hp -= dmg;
+              addLog(`${enemy.name}の攻撃！ あなたは${dmg}ダメージを受けた！${isCrit ? '(痛恨!)' : ''}`);
+            }
+          }
+        } 
+
+        let isOver = false;
+        let nextTargetId = targetEnemy ? targetEnemy.id : newEnemies.find(e => e.hp > 0)?.id;
+
+        const handleDefeat = () => {
+          isOver = true;
+          newPlayer.hp = Math.floor(stats.maxHp * 0.2);
+          
+          if (battle.isDefense) {
+            newPlayer.underAttack = false;
+            const lostTerritory = Math.min(newPlayer.territory, 2);
+            newPlayer.territory -= lostTerritory;
+            addLog(`【防衛失敗】領土を${lostTerritory}奪われてしまった...`);
+            setTimeout(() => { 
+              showToast(`防衛に失敗し、領土が${lostTerritory}減少しました`);
+              setPlayer(newPlayer); persistSave(currentSlot, newPlayer); setGameState('main'); 
+            }, 3000);
+          } else if (battle.isInvasion) {
+            addLog(`【侵略失敗】敵国の返り討ちに遭った...`);
+            setTimeout(() => { 
+              showToast(`侵略に失敗しました`);
+              setPlayer(newPlayer); persistSave(currentSlot, newPlayer); setGameState('main'); 
+            }, 2500);
+          } else {
+            newPlayer.gold = Math.floor(newPlayer.gold / 2);
+            addLog('あなたは倒れてしまった...');
+            setTimeout(() => { 
+              showToast('所持金が半分になり拠点に戻されました');
+              setPlayer(newPlayer); persistSave(currentSlot, newPlayer); setGameState('main'); 
+            }, 2000);
+          }
+        };
+
+        if (fled) {
+          if (battle.isDefense) {
+            handleDefeat();
+          } else {
+            isOver = true;
+            setTimeout(() => { 
+              newPlayer = processTurnIncomeAndInvasion(newPlayer);
+              setPlayer(newPlayer); persistSave(currentSlot, newPlayer); setGameState('main'); 
+            }, 1500);
+          }
+        } else if (newPlayer.hp <= 0) {
+          handleDefeat();
+        } else if (newEnemies.every(e => e.hp <= 0)) {
+          let goldBonus = battle.isDefense ? 1.5 : battle.isInvasion ? 2.5 : 1.0;
+          addLog(battle.isDefense ? `敵軍を撃退した！防衛成功！` : battle.isInvasion ? `敵国拠点を攻略！` : `敵を全滅させた！`);
+          
+          const totalExp = newEnemies.reduce((sum, e) => sum + e.exp, 0);
+          const totalGold = Math.floor(newEnemies.reduce((sum, e) => sum + e.gold, 0) * goldBonus);
+          addLog(`${totalExp}の経験値と、${totalGold}Gを手に入れた！`);
+          
+          newPlayer.exp += totalExp;
+          newPlayer.gold += totalGold;
+          
+          if (battle.isDefense) {
+            newPlayer.underAttack = false;
+          } else if (battle.isInvasion) {
+            newPlayer.territory += 3;
+            newPlayer.nations[battle.targetNationId].relation = 'hostile';
+            addLog(`【領土拡張】敵国の領地を奪い、領土が3増加！`);
+          } else {
+            newPlayer.territory += 1; 
+            if (battle.direction) {
+              addLog(`【領土拡張】${EXPLORE_DIRECTIONS[battle.direction].name}の領地を開拓し、領土が1増加！`);
+            } else {
+              addLog(`【領土拡張】領地を開拓し、領土が1増加！`);
+            }
+          }
+
+          let requiredExp = newPlayer.level * 20;
+          while (newPlayer.exp >= requiredExp && newPlayer.level < MAX_LEVEL) {
+            newPlayer.exp -= requiredExp;
+            newPlayer.level++;
+            newPlayer.sp += 10;
+            
+            newPlayer.baseStats.maxHp += randomInt(5, 10);
+            newPlayer.baseStats.maxMp += randomInt(1, 3);
+            newPlayer.baseStats.atk += randomInt(1, 3);
+            newPlayer.baseStats.def += randomInt(1, 3);
+            newPlayer.baseStats.agi += randomInt(1, 3);
+            newPlayer.baseStats.luk += randomInt(1, 2);
+            
+            addLog(`レベルが${newPlayer.level}に上がった！SPを10獲得！`);
+            if (newPlayer.level % 10 === 0) {
+              addLog(`【スキル樹拡張】レベル${newPlayer.level}達成！新しいスキルが解放された！`);
+            }
+            requiredExp = newPlayer.level * 20;
+          }
+          
+          isOver = true;
+          setTimeout(() => { 
+            if (!battle.isDefense) newPlayer = processTurnIncomeAndInvasion(newPlayer);
+            setPlayer(newPlayer); persistSave(currentSlot, newPlayer); setGameState('main'); 
+          }, 2500);
+        } else {
+           if (!newEnemies.find(e => e.id === nextTargetId && e.hp > 0)) {
+               nextTargetId = newEnemies.find(e => e.hp > 0)?.id;
+           }
+        }
+
+        setPlayer(newPlayer);
+        setBattle({ ...battle, enemies: newEnemies, logs, isOver, selectedTargetId: nextTargetId });
+      };
+
+      const useItemInBattle = (item) => {
+        let newInventory = [...player.inventory];
+        const itemIndex = newInventory.findIndex(i => i.uid === item.uid);
+        if (newInventory[itemIndex].amount > 1) newInventory[itemIndex].amount -= 1;
+        else newInventory.splice(itemIndex, 1);
+        setPlayer({ ...player, inventory: newInventory });
+        setSelectedItem(null);
+        processTurn('item', null, item);
+      };
+
+      const equipItem = (item) => {
+        let newEquip = { ...player.equipment };
+        newEquip[item.type] = item;
+        const newPlayer = { ...player, equipment: newEquip };
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${item.name}を装備しました`);
+        setSelectedItem(null);
+      };
+
+      const useItemField = (item) => {
+        const stats = getStats();
+        let newHp = player.hp;
+        let newMp = player.mp;
+        let msg = "";
+
+        if (item.healHp) {
+          if (newHp >= stats.maxHp) return showToast('HPは満タンです');
+          newHp = Math.min(stats.maxHp, newHp + item.healHp);
+          msg += `HPが${item.healHp}回復 `;
+        }
+        if (item.healMp) {
+          if (newMp >= stats.maxMp) return showToast('MPは満タンです');
+          newMp = Math.min(stats.maxMp, newMp + item.healMp);
+          msg += `MPが${item.healMp}回復`;
+        }
+        
+        let newInventory = [...player.inventory];
+        const itemIndex = newInventory.findIndex(i => i.uid === item.uid);
+        if (newInventory[itemIndex].amount > 1) newInventory[itemIndex].amount -= 1;
+        else newInventory.splice(itemIndex, 1);
+        
+        const newPlayer = { ...player, hp: newHp, mp: newMp, inventory: newInventory };
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+        showToast(`${item.name}を使用し、${msg.trim()}`);
+        setSelectedItem(null);
+      };
+
+      const unlockSkill = (node) => {
+        if (player.sp < node.cost) return showToast('割り振りポイント(SP)が足りません');
+        
+        // 取得前のステータス
+        const oldStats = getStats(player);
+
+        let newPlayer = { ...player };
+        newPlayer.sp -= node.cost;
+        newPlayer.unlockedNodes.push(node.id);
+
+        // 取得後の新ステータス
+        const newStats = getStats(newPlayer);
+
+        if (node.type === 'skill') {
+          newPlayer.skills.push(node.skillId);
+          showToast(`スキル「${node.name}」を習得した！`);
+        } else {
+          showToast(`能力「${node.name}」を解放した！`);
+          // HP・MP上限が上がった場合は現在値もその分増やす
+          if (newStats.maxHp > oldStats.maxHp) {
+            newPlayer.hp += (newStats.maxHp - oldStats.maxHp);
+          }
+          if (newStats.maxMp > oldStats.maxMp) {
+            newPlayer.mp += (newStats.maxMp - oldStats.maxMp);
+          }
+        }
+        setPlayer(newPlayer);
+        persistSave(currentSlot, newPlayer);
+      };
+
+      // ==========================================
+      // レンダリング関数
+      // ==========================================
+
+      const renderTitle = () => (
+        <div className="flex flex-col items-center justify-center h-full space-y-8 p-6 animate-fade-in relative overflow-hidden bg-gray-900">
+          <div className="text-center relative z-10">
+            <i className="fa-solid fa-location-dot text-6xl mx-auto text-blue-400 mb-6 drop-shadow-[0_0_15px_rgba(96,165,250,0.5)]"></i>
+            <h1 className="text-4xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-500 shadow-sm mb-2">
+              TERRITORY<br/>EXPAND RPG
+            </h1>
+            <p className="mt-3 text-gray-400 text-sm tracking-widest">未知の領土を切り拓け</p>
+          </div>
+          <div className="w-full max-w-xs space-y-4 relative z-10 mt-10">
+            <button onClick={() => setGameState('slots_create')} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-transform active:scale-95 flex items-center justify-center gap-2">
+              <i className="fa-solid fa-play"></i> はじめから
+            </button>
+            <button onClick={() => setGameState('slots_load')} className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2">
+              <i className="fa-solid fa-floppy-disk"></i> つづきから
+            </button>
+          </div>
+        </div>
+      );
+
+      const renderSlots = (mode) => {
+        return (
+          <div className="flex flex-col h-full p-6 space-y-4 bg-gray-900">
+            <h2 className="text-2xl font-bold text-center border-b border-gray-700 pb-2">
+              {mode === 'load' ? 'ロードするデータを選択' : mode === 'save' ? 'セーブするスロットを選択' : 'データを作るスロットを選択'}
+            </h2>
+            
+            <div className="flex-1 space-y-3 mt-4">
+              {[1, 2, 3].map(slot => {
+                const info = getSaveDataInfo(slot);
+                return (
+                  <button key={slot} 
+                    onClick={() => {
+                      if (mode === 'load') {
+                        if (info.exists) loadGameFromSlot(slot);
+                        else showToast('データがありません');
+                      } else if (mode === 'save') {
+                        saveGameToSlot(slot);
+                      } else if (mode === 'create') {
+                        setCurrentSlot(slot);
+                        setGameState('create');
+                      }
+                    }}
+                    className={`w-full p-4 rounded-xl border-2 text-left transition-all ${
+                      info.exists ? 'border-blue-500 bg-gray-800 hover:bg-gray-700' : 'border-gray-700 bg-gray-800/50 hover:bg-gray-700 text-gray-500'
+                    }`}
+                  >
+                    <div className="font-bold text-lg mb-1">スロット {slot}</div>
+                    {info.exists ? (
+                      <div className="text-sm text-gray-300">
+                        <span className="text-white font-bold mr-2">{info.name}</span>
+                        <span className="text-yellow-400 mr-2">Lv.{info.level}</span>
+                        <span className="text-blue-300">領土:{info.territory}</span>
+                        <div className="text-xs text-gray-500 mt-1">{info.time || '記録あり'}</div>
+                      </div>
+                    ) : (
+                      <div className="text-sm">データなし</div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            
+            <button onClick={() => setGameState(mode === 'save' ? 'main' : 'title')} className="w-full bg-gray-700 text-white font-bold py-3 rounded-xl mt-4">戻る</button>
+          </div>
+        )
+      };
+
+      const renderCreate = () => (
+        <div className="flex flex-col h-full p-6 space-y-6">
+          <h2 className="text-2xl font-bold text-center border-b border-gray-700 pb-2">キャラクター作成 (スロット{currentSlot})</h2>
+          <div className="space-y-2">
+            <label className="text-gray-400 text-sm">名前を入力</label>
+            <input 
+              type="text" maxLength={10} value={createData.name}
+              onChange={(e) => setCreateData({...createData, name: e.target.value})}
+              className="w-full bg-gray-800 border border-gray-600 rounded-lg p-3 text-white focus:outline-none focus:border-blue-500"
+              placeholder="勇者の名前"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-gray-400 text-sm">アバターを選択</label>
+            <div className="grid grid-cols-4 gap-3">
+              {AVATARS.map(av => (
+                <button key={av} onClick={() => setCreateData({...createData, avatar: av})}
+                  className={`text-3xl p-2 rounded-lg border-2 transition-all ${createData.avatar === av ? 'border-blue-500 bg-gray-700' : 'border-transparent bg-gray-800'}`}>
+                  {av}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex-grow"></div>
+          <button onClick={initGame} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95">冒険を始める</button>
+          <button onClick={() => setGameState('slots_create')} className="w-full bg-transparent text-gray-400 py-2 text-sm">戻る</button>
+        </div>
+      );
+
+      const renderCityscape = () => {
+        const hour = new Date().getHours();
+        let skyClass = "bg-sky-400"; 
+        let sunMoon = <i className="fa-solid fa-sun text-yellow-300 absolute top-4 left-6 text-3xl animate-pulse"></i>;
+        
+        if (player.underAttack) {
+          skyClass = "bg-red-900 bg-alert";
+          sunMoon = null;
+        } else if (hour >= 16 && hour < 19) {
+          skyClass = "bg-orange-500"; 
+          sunMoon = <i className="fa-solid fa-sun text-red-500 absolute top-10 left-10 text-3xl"></i>;
+        } else if (hour >= 19 || hour < 6) {
+          skyClass = "bg-indigo-950"; 
+          sunMoon = <i className="fa-solid fa-moon text-yellow-100 absolute top-4 right-8 text-3xl"></i>;
+        } else if (hour >= 6 && hour < 10) {
+          skyClass = "bg-blue-300"; 
+          sunMoon = <i className="fa-solid fa-sun text-yellow-200 absolute top-8 left-4 text-3xl"></i>;
+        }
+
+        const merchantHere = isMerchantAvailable();
+
+        return (
+          <div className={`h-36 w-full relative overflow-hidden transition-colors duration-1000 ${skyClass}`}>
+            {sunMoon}
+            {!player.underAttack && <i className="fa-solid fa-cloud text-white/20 absolute top-6 right-16 text-5xl"></i>}
+            {!player.underAttack && <i className="fa-solid fa-cloud text-white/20 absolute top-12 left-24 text-4xl"></i>}
+            
+            <div className="absolute bottom-0 w-full flex items-end justify-around px-2 pb-1 gap-1">
+              <div className="w-1/4 h-16 bg-gray-900 rounded-t-sm relative">
+                <div className="absolute top-2 left-2 w-3 h-4 bg-yellow-500/50"></div>
+              </div>
+              <div className="w-1/3 h-24 bg-gray-800 rounded-t-md relative">
+                <div className="absolute top-4 left-3 w-4 h-5 bg-yellow-500/50"></div>
+                <div className="absolute top-4 right-3 w-4 h-5 bg-yellow-500/50"></div>
+              </div>
+              <div className="w-1/4 h-20 bg-gray-900 rounded-t-sm relative">
+                 {merchantHere && !player.underAttack && (
+                   <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-gray-800 text-green-400 p-2 rounded-full border border-green-700 animate-bounce flex items-center justify-center">
+                     <i className="fa-solid fa-store text-sm"></i>
+                   </div>
+                 )}
+                <div className="absolute top-6 left-1/2 transform -translate-x-1/2 w-6 h-8 bg-yellow-500/30 rounded-t-full"></div>
+              </div>
+            </div>
+            <div className="absolute bottom-0 w-full h-1 bg-gray-950"></div>
+          </div>
+        );
+      };
+
+      const renderMain = () => {
+        const stats = getStats();
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            
+            {player.underAttack && (
+              <div className="absolute inset-0 bg-red-950/90 z-50 flex flex-col items-center justify-center p-6 animate-fade-in backdrop-blur-sm">
+                <div className="text-center animate-pulse mb-8">
+                  <i className="fa-solid fa-triangle-exclamation text-7xl text-red-500 mb-6 drop-shadow-[0_0_20px_rgba(239,68,68,1)]"></i>
+                  <h2 className="text-3xl font-extrabold text-white mb-2">緊急事態発生！</h2>
+                  <p className="text-red-200 text-sm leading-relaxed">
+                    敵軍が自国領土に侵攻してきました！<br/>
+                    直ちに防衛の指揮を執ってください！
+                  </p>
+                </div>
+                <button onClick={() => startBattle('defense')} className="w-full max-w-xs bg-gradient-to-r from-red-600 to-red-800 text-white font-bold py-5 rounded-2xl shadow-[0_0_20px_rgba(239,68,68,0.8)] flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
+                  <i className="fa-solid fa-shield-halved text-3xl"></i>
+                  <span className="text-lg">防衛戦を開始する</span>
+                </button>
+              </div>
+            )}
+
+            {renderCityscape()}
+
+            <div className="bg-gray-800 p-4 shadow-md rounded-b-2xl border-b border-gray-700 relative -mt-2 z-10">
+              <div className="flex justify-between items-center mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="text-4xl bg-gray-700 p-2 rounded-full h-14 w-14 flex items-center justify-center border border-gray-600">{player.avatar}</div>
+                  <div>
+                    <div className="font-bold text-lg">{player.name} <span className="text-yellow-400 text-sm font-normal">Lv.{player.level}</span></div>
+                    <div className="text-sm text-gray-400 flex items-center gap-1">
+                      <i className="fa-solid fa-location-dot"></i> 領土: {player.territory}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-yellow-400 font-bold flex items-center justify-end gap-1"><i className="fa-solid fa-coins"></i> {player.gold} G</div>
+                  <div className="text-blue-300 text-sm font-bold">SP: {player.sp}</div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-green-400 font-bold">HP</span>
+                    <span>{player.hp} / {stats.maxHp}</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div className="bg-green-500 h-2 rounded-full transition-all" style={{width: `${Math.max(0, (player.hp/stats.maxHp)*100)}%`}}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-blue-400 font-bold">MP</span>
+                    <span>{player.mp} / {stats.maxMp}</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div className="bg-blue-500 h-2 rounded-full transition-all" style={{width: `${Math.max(0, stats.maxMp > 0 ? (player.mp/stats.maxMp)*100 : 0)}%`}}></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-grow p-4 space-y-4 overflow-y-auto pb-20">
+              
+              <button onClick={() => setShowExploreModal(true)} disabled={player.underAttack} className="w-full bg-gradient-to-r from-blue-600 to-indigo-500 text-white font-bold py-5 rounded-2xl shadow-lg flex flex-col items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50">
+                <i className="fa-solid fa-compass text-3xl"></i>
+                <span className="text-lg">領土を広げる (探索へ)</span>
+              </button>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setGameState('infra')} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50">
+                  <i className="fa-solid fa-hammer text-yellow-500 text-xl"></i>
+                  <span className="text-xs font-bold">インフラ整備</span>
+                </button>
+                <button onClick={() => setGameState('diplomacy')} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50">
+                  <i className="fa-solid fa-handshake text-emerald-400 text-xl"></i>
+                  <span className="text-xs font-bold">他国・外交</span>
+                </button>
+                <button onClick={() => setGameState('map')} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50">
+                  <i className="fa-solid fa-map-location-dot text-blue-400 text-xl"></i>
+                  <span className="text-xs font-bold">勢力マップ</span>
+                </button>
+                <button onClick={() => setGameState('skill')} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 relative disabled:opacity-50">
+                  <i className="fa-solid fa-bolt text-yellow-400 text-xl"></i>
+                  <span className="text-xs font-bold">スキル樹</span>
+                  {player.sp > 0 && <span className="absolute top-2 right-2 bg-red-500 w-2.5 h-2.5 rounded-full animate-pulse"></span>}
+                </button>
+                <button onClick={() => setGameState('inventory')} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50">
+                  <i className="fa-solid fa-suitcase text-purple-400 text-xl"></i>
+                  <span className="text-xs font-bold">装備・道具</span>
+                </button>
+                <button onClick={handleShopClick} disabled={player.underAttack} className="bg-gray-800 border border-gray-700 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:bg-gray-700 relative disabled:opacity-50">
+                  <i className="fa-solid fa-store text-green-400 text-xl"></i>
+                  <span className="text-xs font-bold">商人 (売買)</span>
+                  {isMerchantAvailable() && !player.underAttack && <span className="absolute top-2 right-2 text-green-400 text-[10px] font-bold">営業中</span>}
+                </button>
+                <button onClick={() => {
+                    if (player.underAttack) return;
+                    if (player.gold >= 50) {
+                      let newPlayer = {...player, gold: player.gold - 50, hp: stats.maxHp, mp: stats.maxMp};
+                      newPlayer = processTurnIncomeAndInvasion(newPlayer);
+                      setPlayer(newPlayer);
+                      persistSave(currentSlot, newPlayer);
+                      showToast('50G支払い、宿屋で休んで全回復した！');
+                    } else {
+                      showToast('ゴールドが足りない...');
+                    }
+                  }}
+                  disabled={player.underAttack}
+                  className="bg-gray-800 border border-gray-700 p-3 rounded-xl col-span-2 flex items-center justify-center gap-2 active:bg-gray-700 disabled:opacity-50">
+                  <i className="fa-solid fa-heart text-pink-400 text-xl"></i>
+                  <span className="text-xs font-bold">宿屋で休む (50G)</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-gray-900/90 backdrop-blur-sm p-2 flex justify-around border-t border-gray-800 absolute bottom-0 w-full max-w-md z-20">
+              <button onClick={() => setGameState('slots_save')} disabled={player.underAttack} className="flex flex-col items-center text-gray-400 hover:text-white p-2 disabled:opacity-50">
+                <i className="fa-solid fa-floppy-disk text-xl"></i>
+                <span className="text-xs mt-1">手動セーブ</span>
+              </button>
+              <button onClick={() => setGameState('title')} disabled={player.underAttack} className="flex flex-col items-center text-gray-400 hover:text-white p-2 disabled:opacity-50">
+                <i className="fa-solid fa-door-open text-xl"></i>
+                <span className="text-xs mt-1">タイトルへ</span>
+              </button>
+            </div>
+
+            {/* 方角選択モーダル */}
+            {showExploreModal && !player.underAttack && (
+              <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 animate-fade-in backdrop-blur-sm">
+                <div className="bg-gray-900 border border-gray-600 rounded-xl w-full max-w-sm overflow-hidden shadow-2xl">
+                  <div className="bg-gray-800 p-4 border-b border-gray-700 text-center relative">
+                    <h3 className="text-xl font-bold">探索する方角を選択</h3>
+                    <button onClick={() => setShowExploreModal(false)} className="absolute right-4 top-4 text-gray-400 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {Object.entries(EXPLORE_DIRECTIONS).map(([key, data]) => (
+                      <button key={key} onClick={() => { setShowExploreModal(false); startBattle('explore', null, key); }} 
+                        className="w-full bg-gray-800 hover:bg-gray-700 p-3 rounded-lg flex items-center gap-4 border border-gray-600 transition-colors shadow">
+                        <div className="w-10 h-10 bg-gray-900 rounded-full flex items-center justify-center text-blue-400 text-lg shrink-0 shadow-inner">
+                          <i className={`fa-solid ${data.icon}`}></i>
+                        </div>
+                        <div className="text-left flex-1">
+                          <div className="font-bold text-base text-white">{data.name}へ向かう</div>
+                          <div className="text-xs text-gray-400">{data.desc}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const renderInfra = () => {
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-hammer text-yellow-500"></i> インフラ整備</h2>
+              <button onClick={() => setGameState('main')} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+            <div className="p-4 bg-gray-800 border-b border-gray-700 flex justify-between items-center sticky top-0 z-10">
+              <span className="text-gray-300 font-bold">所持金</span>
+              <span className="text-xl font-bold text-yellow-400"><i className="fa-solid fa-coins mr-1"></i>{player.gold} G</span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-8">
+              {Object.entries(INFRA_OPTIONS).map(([key, data]) => {
+                const isBuilt = player.infra?.[key];
+                return (
+                  <div key={key} className={`p-4 rounded-xl border-2 ${isBuilt ? 'bg-gray-800/60 border-green-600/60' : 'bg-gray-800 border-gray-700'} shadow-lg space-y-3`}>
+                    <div className="flex justify-between items-center">
+                      <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                        <i className={`fa-solid ${data.icon} text-yellow-400`}></i> {data.name}
+                      </h3>
+                      {isBuilt ? <span className="bg-green-700 text-white text-xs px-2 py-1 rounded font-bold">整備済み</span> : <span className="text-yellow-400 font-bold text-sm">{data.cost} G</span>}
+                    </div>
+                    <p className="text-xs text-gray-300">{data.desc}</p>
+                    {!isBuilt && (
+                      <button onClick={() => buildInfra(key)} disabled={player.gold < data.cost} className="w-full bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white py-2 rounded font-bold text-xs shadow">
+                        整備を実行する
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      };
+
+      const renderDiplomacy = () => {
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-handshake text-emerald-400"></i> 他国との外交</h2>
+              <button onClick={() => setGameState('main')} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-8">
+              {Object.values(player.nations || {}).map(nation => {
+                const tradeCost = nation.tradeCost * (nation.tradeLevel + 1);
+                return (
+                  <div key={nation.id} className={`p-4 rounded-xl border-2 ${nation.color} shadow-lg space-y-3`}>
+                    <div className="flex justify-between items-center border-b border-gray-700/50 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{nation.icon}</span>
+                        <div>
+                          <h3 className="font-bold text-lg text-white">{nation.name}</h3>
+                          <span className="text-xs text-gray-400">軍事力: {nation.power} / 領土: {nation.baseTerritory}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        {nation.relation === 'allied' && <span className="bg-emerald-600 text-white text-xs px-2 py-1 rounded font-bold">同盟国</span>}
+                        {nation.relation === 'hostile' && <span className="bg-red-600 text-white text-xs px-2 py-1 rounded font-bold">敵対中</span>}
+                        {nation.relation === 'neutral' && <span className="bg-gray-600 text-white text-xs px-2 py-1 rounded font-bold">中立</span>}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-300">{nation.desc}</p>
+                    <div className="bg-black/30 p-2 rounded text-xs space-y-1">
+                      <div className="flex justify-between">
+                        <span>貿易レベル: <strong className="text-yellow-400">Lv.{nation.tradeLevel}</strong></span>
+                        <span>毎ターン収入: <strong className="text-green-400">+{nation.tradeLevel * 60 + Math.floor(player.territory * 12)} G</strong></span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      {nation.relation === 'neutral' && (
+                        <button onClick={() => handleAlliance(nation.id)} className="bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded text-xs font-bold shadow">
+                          同盟を結ぶ ({nation.allianceCost}G)
+                        </button>
+                      )}
+                      {nation.relation === 'allied' && (
+                        <div className="bg-emerald-900/40 border border-emerald-600/50 text-emerald-300 text-xs p-2 rounded text-center font-bold">
+                          防衛時に援軍到来！
+                        </div>
+                      )}
+                      <button onClick={() => handleTrade(nation.id)} className="bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold shadow">
+                        貿易投資 ({tradeCost}G)
+                      </button>
+                      <button onClick={() => startBattle('invasion', nation.id)} className="col-span-2 bg-gradient-to-r from-red-700 to-red-600 hover:from-red-600 hover:to-red-500 text-white py-2 rounded text-xs font-bold shadow mt-1">
+                        <i className="fa-solid fa-skull mr-1"></i> 領土へ攻め込む (侵略)
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      };
+
+      const renderMap = () => {
+        const gridSize = 11;
+        const cellSize = 'w-6 h-6 sm:w-8 sm:h-8';
+
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-map-location-dot text-blue-400"></i> 全体勢力マップ</h2>
+              <button onClick={() => setGameState('main')} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+            
+            <div className="p-3 bg-gray-800 border-b border-gray-700 text-center sticky top-0 z-10 text-xs flex justify-around">
+              <div>自国領土: <strong className="text-blue-400 text-base">{player.territory}</strong></div>
+              <div>架橋状況: <strong className={player.infra?.bridge ? "text-green-400" : "text-gray-400"}>{player.infra?.bridge ? "完成" : "未整備"}</strong></div>
+            </div>
+
+            <div className="flex-1 flex flex-col items-center justify-center p-2 overflow-auto bg-gray-950">
+              <div className="grid gap-0.5 sm:gap-1 p-2 bg-gray-800 rounded-lg shadow-inner" style={{ gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))` }}>
+                {Array.from({ length: gridSize * gridSize }).map((_, idx) => {
+                  const x = (idx % gridSize) - Math.floor(gridSize / 2);
+                  const y = Math.floor(idx / gridSize) - Math.floor(gridSize / 2);
+                  
+                  const mapIdx = MAP_COORDS.findIndex(c => c.x === x && c.y === y);
+                  const isOwned = mapIdx !== -1 && mapIdx <= player.territory;
+                  const isCenter = x === 0 && y === 0;
+
+                  const isRiver = RIVER_POSITIONS.includes(idx);
+
+                  const isGranbell = NATION_TERRITORIES.granbell.includes(idx);
+                  const isRune = NATION_TERRITORIES.rune.includes(idx);
+                  const isBarzac = NATION_TERRITORIES.barzac.includes(idx);
+
+                  return (
+                    <div key={idx} className={`${cellSize} rounded-sm flex items-center justify-center text-xs transition-colors duration-500
+                      ${isCenter ? 'bg-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.8)]' : 
+                        isOwned ? 'bg-blue-500/80 border border-blue-400 shadow-[0_0_5px_rgba(59,130,246,0.5)]' : 
+                        isGranbell ? 'bg-yellow-900/60 border border-yellow-600' :
+                        isRune ? 'bg-emerald-900/60 border border-emerald-600' :
+                        isBarzac ? 'bg-purple-900/60 border border-purple-600' :
+                        isRiver ? (player.infra?.bridge ? 'bg-cyan-700 border border-cyan-400' : 'bg-blue-900 border border-blue-700') : 'bg-gray-900 border border-gray-800'}
+                    `}>
+                      {isCenter && <i className="fa-solid fa-crown text-white text-[10px]"></i>}
+                      {idx === 18 && <span>👑</span>}
+                      {idx === 90 && <span>🧝‍♀️</span>}
+                      {idx === 106 && <span>⚔️</span>}
+                      {isRiver && !isCenter && !isGranbell && !isRune && !isBarzac && !isOwned && (
+                        <i className={`fa-solid ${player.infra?.bridge ? 'fa-bridge text-cyan-200' : 'fa-water text-blue-400'} text-[9px]`}></i>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-gray-400 text-xs mt-3 space-y-1 text-center">
+                <div>👑グランベル 🧝‍♀️ルーン ⚔️バルザック <i className="fa-solid fa-water text-blue-400"></i>大河</div>
+                <div className="text-gray-500">川を渡るにはインフラ整備で「架橋工事」が必要です。</div>
+              </div>
+            </div>
+          </div>
+        )
+      };
+
+      const renderBattle = () => {
+        const { enemies, logs, isOver, selectedTargetId, isDefense, isInvasion } = battle;
+        const stats = getStats();
+        
+        return (
+          <div className="flex flex-col h-full bg-gray-950">
+            {isDefense && (
+              <div className="bg-red-600 text-white text-center font-bold text-sm py-1 animate-pulse">
+                <i className="fa-solid fa-shield-halved"></i> 領土防衛戦！
+              </div>
+            )}
+            {isInvasion && (
+              <div className="bg-purple-700 text-white text-center font-bold text-sm py-1">
+                <i className="fa-solid fa-skull"></i> 敵国侵略戦！
+              </div>
+            )}
+            <div className="flex-1 flex flex-col items-center justify-center p-4 relative overflow-y-auto">
+              <div className="flex flex-wrap justify-center gap-4 w-full">
+                {enemies.map(enemy => (
+                  <div 
+                    key={enemy.id} 
+                    onClick={() => !isOver && enemy.hp > 0 && setBattle({...battle, selectedTargetId: enemy.id})}
+                    className={`flex flex-col items-center p-2 rounded-lg border-2 transition-all cursor-pointer ${
+                      enemy.hp <= 0 ? 'opacity-30 border-transparent grayscale' : 
+                      selectedTargetId === enemy.id ? 'border-red-500 bg-red-900/20 scale-105' : 'border-gray-700 bg-gray-800/50'
+                    } ${enemy.hp > 0 && selectedTargetId === enemy.id ? 'animate-pulse' : ''}`}
+                    style={{ width: enemies.length > 2 ? '45%' : '60%' }}
+                  >
+                    <i className={`fa-solid fa-skull ${enemies.length > 2 ? 'text-4xl' : 'text-5xl'} ${enemy.hp > 0 ? 'text-red-500' : 'text-gray-500'} mb-2`}></i>
+                    <div className="w-full text-center">
+                      <div className="font-bold text-red-300 text-xs truncate">
+                        {enemy.name} <span className="text-[10px] text-gray-400">Lv.{enemy.level}</span>
+                      </div>
+                      <div className="w-full bg-gray-900 rounded-full h-1.5 mt-1 relative">
+                        <div className="bg-red-500 h-1.5 rounded-full transition-all" style={{width: `${Math.max(0, (enemy.hp/enemy.maxHp)*100)}%`}}></div>
+                      </div>
+                      <div className="text-[9px] text-red-200 mt-0.5">{enemy.hp} / {enemy.maxHp}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="h-40 bg-black border-y border-gray-800 p-2 overflow-y-auto text-xs space-y-1 font-mono leading-relaxed">
+              {logs.map((log, idx) => {
+                let color = 'text-gray-300';
+                if (log.includes('倒した') || log.includes('手に入れた') || log.includes('全滅') || log.includes('成功') || log.includes('拡張')) color = 'text-yellow-400';
+                if (log.includes('ダメージを受けた') || log.includes('奪われてしまった') || log.includes('失敗')) color = 'text-red-400';
+                if (log.includes('会心!')) color = 'text-orange-400 font-bold';
+                if (log.includes('回復') || log.includes('援軍') || log.includes('効果発動')) color = 'text-green-400';
+                return <div key={idx} className={color}>{log}</div>;
+              })}
+              <div ref={logsEndRef} />
+            </div>
+
+            <div className="bg-gray-800 p-2 flex justify-between items-center text-sm border-b border-gray-700">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{player.avatar}</span>
+                <span className="font-bold text-sm">{player.name}</span>
+              </div>
+              <div className="flex gap-3 text-xs">
+                <span className="text-green-400 font-bold">HP: {player.hp}/{stats.maxHp}</span>
+                <span className="text-blue-400 font-bold">MP: {player.mp}/{stats.maxMp}</span>
+              </div>
+            </div>
+
+            <div className="p-2 grid grid-cols-2 gap-2 bg-gray-900 pb-4">
+              {!isOver && !selectedItem && (
+                <>
+                  <button onClick={() => processTurn('attack')} className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg font-bold border border-gray-600 active:bg-gray-500 shadow-md">たたかう</button>
+                  <button onClick={() => setSelectedItem('skill_select')} className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg font-bold border border-gray-600 active:bg-gray-500 shadow-md">スキル</button>
+                  <button onClick={() => setSelectedItem('item_select')} className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg font-bold border border-gray-600 active:bg-gray-500 shadow-md">アイテム</button>
+                  <button onClick={() => processTurn('flee')} className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg font-bold border border-gray-600 active:bg-gray-500 shadow-md">にげる</button>
+                </>
+              )}
+
+              {!isOver && selectedItem === 'skill_select' && (
+                <div className="col-span-2 bg-gray-800 p-2 rounded-lg border border-gray-700 space-y-2 max-h-48 overflow-y-auto shadow-inner">
+                  <div className="flex justify-between items-center mb-1 px-1">
+                    <span className="text-sm text-gray-400 font-bold">スキル選択</span>
+                    <button onClick={() => setSelectedItem(null)} className="text-gray-400 bg-gray-700 p-1 rounded hover:bg-gray-600"><i className="fa-solid fa-xmark"></i></button>
+                  </div>
+                  {player.skills.length === 0 ? (
+                    <div className="text-center text-sm text-gray-500 py-2">習得しているスキルがありません</div>
+                  ) : (
+                    player.skills.map(skillId => {
+                      const s = SKILLS_DATA[skillId];
+                      const canUse = player.mp >= s.mpCost;
+                      return (
+                        <button key={skillId} disabled={!canUse} onClick={() => {setSelectedItem(null); processTurn('skill', s);}} 
+                          className={`w-full text-left p-2 rounded flex flex-col justify-center ${canUse ? 'bg-gray-700 active:bg-gray-600 text-white' : 'bg-gray-800 text-gray-500'}`}>
+                          <div className="flex justify-between w-full">
+                            <span className="font-bold">{s.name} {s.target === 'all' && <span className="text-xs bg-red-900/50 text-red-300 px-1 rounded ml-1">全体</span>}</span>
+                            <span className="text-blue-300 text-xs">MP {s.mpCost}</span>
+                          </div>
+                          <span className="text-xs text-gray-400 mt-1">{s.desc}</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {!isOver && selectedItem === 'item_select' && (
+                <div className="col-span-2 bg-gray-800 p-2 rounded-lg border border-gray-700 space-y-2 max-h-48 overflow-y-auto shadow-inner">
+                  <div className="flex justify-between items-center mb-1 px-1">
+                    <span className="text-sm text-gray-400 font-bold">アイテム選択</span>
+                    <button onClick={() => setSelectedItem(null)} className="text-gray-400 bg-gray-700 p-1 rounded hover:bg-gray-600"><i className="fa-solid fa-xmark"></i></button>
+                  </div>
+                  {player.inventory.filter(i => i.type === 'item').length === 0 ? (
+                    <div className="text-center text-sm text-gray-500 py-2">使えるアイテムがありません</div>
+                  ) : (
+                    player.inventory.filter(i => i.type === 'item').map(item => (
+                      <button key={item.uid} onClick={() => useItemInBattle(item)} className="w-full text-left bg-gray-700 p-2 rounded flex justify-between items-center active:bg-gray-600 text-white">
+                        <span>{item.name} <span className="text-xs text-gray-400">x{item.amount}</span></span>
+                        <div className="text-xs text-right">
+                          {item.healHp > 0 && <span className="text-green-300 ml-2">HP回復</span>}
+                          {item.healMp > 0 && <span className="text-blue-300 ml-2">MP回復</span>}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      const renderInventory = () => {
+        const stats = getStats();
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-suitcase"></i> 装備・道具</h2>
+              <button onClick={() => {setGameState('main'); setSelectedItem(null);}} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+
+            <div className="p-4 bg-gray-800 border-b border-gray-700">
+              <div className="grid grid-cols-4 gap-2 text-sm mb-4 text-center">
+                <div className="bg-gray-700 p-2 rounded"><div className="text-gray-400 text-xs">攻撃</div><div className="font-bold">{stats.atk}</div></div>
+                <div className="bg-gray-700 p-2 rounded"><div className="text-gray-400 text-xs">防御</div><div className="font-bold">{stats.def}</div></div>
+                <div className="bg-gray-700 p-2 rounded"><div className="text-gray-400 text-xs">速さ</div><div className="font-bold">{stats.agi}</div></div>
+                <div className="bg-gray-700 p-2 rounded"><div className="text-gray-400 text-xs">運</div><div className="font-bold text-yellow-400">{stats.luk}</div></div>
+              </div>
+              <div className="space-y-2 text-sm">
+                <div className="flex bg-gray-700/50 p-2 rounded items-center border border-gray-600">
+                  <span className="w-12 text-gray-400">武器:</span> <span className="font-bold text-white">{player.equipment.weapon?.name || 'なし'}</span>
+                </div>
+                <div className="flex bg-gray-700/50 p-2 rounded items-center border border-gray-600">
+                  <span className="w-12 text-gray-400">防具:</span> <span className="font-bold text-white">{player.equipment.armor?.name || 'なし'}</span>
+                </div>
+                <div className="flex bg-gray-700/50 p-2 rounded items-center border border-gray-600">
+                  <span className="w-12 text-gray-400">靴:</span> <span className="font-bold text-white">{player.equipment.shoes?.name || 'なし'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-2 pb-6">
+              {player.inventory.map(item => {
+                const isEquipped = Object.values(player.equipment).some(eq => eq?.uid === item.uid);
+                const isSelected = selectedItem?.uid === item.uid;
+                let Icon = <i className="fa-solid fa-circle text-gray-400"></i>;
+                if(item.type === 'weapon') Icon = <i className="fa-solid fa-khanda text-red-400"></i>;
+                if(item.type === 'armor') Icon = <i className="fa-solid fa-shield text-blue-400"></i>;
+                if(item.type === 'shoes') Icon = <i className="fa-solid fa-bolt text-yellow-400"></i>;
+                if(item.type === 'item') Icon = <i className="fa-solid fa-heart text-green-400"></i>;
+
+                return (
+                  <div key={item.uid} onClick={() => setSelectedItem(isSelected ? null : item)}
+                    className={`bg-gray-800 border p-3 rounded-lg transition-all ${isSelected ? 'border-blue-500 bg-gray-700 shadow-md' : 'border-gray-700'}`}>
+                    <div className="flex justify-between items-center">
+                      <div className="font-bold flex items-center gap-2">
+                        {Icon} {item.name} {item.amount && <span className="text-gray-400 text-sm">x{item.amount}</span>}
+                      </div>
+                      {isEquipped && <span className="text-xs bg-blue-600/80 px-2 py-1 rounded text-white font-bold border border-blue-500">装備中</span>}
+                    </div>
+                    {isSelected && (
+                      <div className="mt-3 pt-3 border-t border-gray-600 animate-fade-in">
+                        <p className="text-sm text-gray-300 mb-3">{item.desc}</p>
+                        {item.type === 'item' ? (
+                          <button onClick={(e) => { e.stopPropagation(); useItemField(item); }} className="w-full bg-green-600 hover:bg-green-500 p-3 rounded-lg font-bold text-sm shadow">使う</button>
+                        ) : (
+                          <button onClick={(e) => { e.stopPropagation(); equipItem(item); }} disabled={isEquipped} className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 p-3 rounded-lg font-bold text-sm shadow">
+                            {isEquipped ? '装備済み' : '装備する'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        );
+      };
+
+      const renderSkillTree = () => {
+        const fullTree = getFullSkillTree(player);
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-bolt text-yellow-400"></i> スキル樹 (Lv.{player.level})</h2>
+              <button onClick={() => setGameState('main')} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+            <div className="p-4 bg-gray-800 border-b border-gray-700 flex justify-between items-center sticky top-0 z-10 shadow-sm">
+              <span className="text-gray-300 font-bold">残りSP</span>
+              <span className="text-2xl font-bold text-blue-400">{player.sp}</span>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-10">
+              
+              <div className="text-xs text-yellow-400 font-bold mb-2 pt-2 border-b border-yellow-900/50 pb-1">
+                <i className="fa-solid fa-star"></i> このキャラクターの固有能力
+              </div>
+              
+              {fullTree.map(node => {
+                const isUnlocked = player.unlockedNodes.includes(node.id);
+                const canUnlock = !isUnlocked && node.req.every(reqId => player.unlockedNodes.includes(reqId));
+                const isPersonal = player.personalSkillTree?.some(p => p.id === node.id);
+
+                let bgClass = 'bg-gray-800 border-gray-700 opacity-50';
+                if (isPersonal) bgClass = 'bg-indigo-950/60 border-indigo-700/50 opacity-60';
+                
+                if (isUnlocked) {
+                  bgClass = isPersonal ? 'bg-indigo-900 border-indigo-400 opacity-80' : 'bg-gray-800 border-green-600/50 opacity-70';
+                } else if (canUnlock) {
+                  bgClass = isPersonal ? 'bg-indigo-800 border-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.4)]' : 'bg-gray-700 border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.3)]';
+                }
+
+                return (
+                  <div key={node.id} className={`p-4 rounded-xl border-2 transition-all ${bgClass}`}>
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h3 className={`font-bold flex items-center gap-2 ${isPersonal ? 'text-yellow-300' : 'text-white'}`}>
+                          {isUnlocked && <span className="text-green-400 text-xs border border-green-600 px-1 rounded bg-green-900/30">習得済</span>}
+                          {node.name}
+                        </h3>
+                        <p className="text-sm text-gray-300 mt-1">{node.desc}</p>
+                      </div>
+                      {!isUnlocked && <div className="text-blue-300 font-bold bg-blue-900/40 px-2 py-1 rounded text-sm border border-blue-800">{node.cost} SP</div>}
+                    </div>
+                    {canUnlock && <button onClick={() => unlockSkill(node)} className={`w-full mt-2 text-white p-2 rounded-lg font-bold text-sm shadow ${isPersonal ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-blue-600 hover:bg-blue-500'}`}>解放する</button>}
+                    {!canUnlock && !isUnlocked && node.req.length > 0 && <p className="text-xs text-red-400 mt-2 font-bold">前提条件が未達成</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      };
+
+      const renderShop = () => {
+        const hour = new Date().getHours();
+        const shopItems = getCurrentShopItems();
+        const isMorning = hour < 12;
+
+        return (
+          <div className="flex flex-col h-full bg-gray-900 relative">
+            <div className="bg-gray-800 p-4 flex items-center justify-between border-b border-gray-700 shadow-md z-10">
+              <h2 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-store text-green-400"></i> 商人</h2>
+              <button onClick={() => setGameState('main')} className="bg-gray-700 px-4 py-2 rounded-lg text-sm font-bold">戻る</button>
+            </div>
+            
+            <div className="p-3 bg-gray-800 border-b border-gray-700 flex justify-between items-center sticky top-0 z-10 text-xs">
+              <div>営業時間: <span className="text-green-400 font-bold">7:00 ~ 23:59</span></div>
+              <div>商品更新: <span className="text-yellow-400 font-bold">{isMorning ? '午前の品揃え (12時に変更)' : '午後の品揃え (0時に変更)'}</span></div>
+            </div>
+
+            <div className="p-3 bg-gray-800 border-b border-gray-700 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-300 font-bold text-sm">所持金</span>
+                <span className="text-xl font-bold text-yellow-400"><i className="fa-solid fa-coins mr-1"></i>{player.gold} G</span>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 bg-gray-900 p-1 rounded-lg border border-gray-700">
+                <button 
+                  onClick={() => setShopTab('buy')} 
+                  className={`py-2 text-xs font-bold rounded-md transition-all ${shopTab === 'buy' ? 'bg-green-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <i className="fa-solid fa-cart-shopping mr-1"></i> 買い出し (購入)
+                </button>
+                <button 
+                  onClick={() => setShopTab('sell')} 
+                  className={`py-2 text-xs font-bold rounded-md transition-all ${shopTab === 'sell' ? 'bg-amber-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <i className="fa-solid fa-sack-dollar mr-1"></i> 買取 (売却)
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 pb-8">
+              {shopTab === 'buy' ? (
+                shopItems.map(item => {
+                  let Icon = <i className="fa-solid fa-circle text-gray-400"></i>;
+                  if(item.type === 'weapon') Icon = <i className="fa-solid fa-khanda text-red-400"></i>;
+                  if(item.type === 'armor') Icon = <i className="fa-solid fa-shield text-blue-400"></i>;
+                  if(item.type === 'shoes') Icon = <i className="fa-solid fa-bolt text-yellow-400"></i>;
+                  if(item.type === 'item') Icon = <i className="fa-solid fa-heart text-green-400"></i>;
+
+                  return (
+                    <div key={item.id} className="bg-gray-800 border border-gray-700 p-3 rounded-lg flex justify-between items-center shadow">
+                      <div>
+                        <div className="font-bold flex items-center gap-2 text-white">{Icon} {item.name}</div>
+                        <div className="text-xs text-gray-400 mt-1">{item.desc}</div>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <span className="text-yellow-400 font-bold text-sm">{item.price} G</span>
+                        <button onClick={() => buyItem(item)} disabled={player.gold < item.price} className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-4 py-1.5 rounded-lg text-sm font-bold shadow">
+                          購入
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })
+              ) : (
+                player.inventory.length === 0 ? (
+                  <div className="text-center text-gray-500 my-10 text-sm">売却できる所持品がありません</div>
+                ) : (
+                  player.inventory.map(item => {
+                    const isEquipped = Object.values(player.equipment).some(eq => eq?.uid === item.uid);
+                    const sellPrice = Math.floor((item.price || 20) / 2);
+
+                    let Icon = <i className="fa-solid fa-circle text-gray-400"></i>;
+                    if(item.type === 'weapon') Icon = <i className="fa-solid fa-khanda text-red-400"></i>;
+                    if(item.type === 'armor') Icon = <i className="fa-solid fa-shield text-blue-400"></i>;
+                    if(item.type === 'shoes') Icon = <i className="fa-solid fa-bolt text-yellow-400"></i>;
+                    if(item.type === 'item') Icon = <i className="fa-solid fa-heart text-green-400"></i>;
+
+                    return (
+                      <div key={item.uid} className="bg-gray-800 border border-gray-700 p-3 rounded-lg flex justify-between items-center shadow">
+                        <div>
+                          <div className="font-bold flex items-center gap-2 text-white">
+                            {Icon} {item.name} {item.amount && <span className="text-gray-400 text-xs">x{item.amount}</span>}
+                            {isEquipped && <span className="text-[10px] bg-blue-600/80 px-1.5 py-0.5 rounded text-white font-bold ml-1">装備中</span>}
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">{item.desc}</div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <span className="text-amber-400 font-bold text-sm">+{sellPrice} G</span>
+                          <button 
+                            onClick={() => sellItem(item)} 
+                            disabled={isEquipped} 
+                            className="bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 text-white px-4 py-1.5 rounded-lg text-sm font-bold shadow"
+                          >
+                            売却
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <div className="min-h-screen bg-black text-white font-sans flex justify-center selection:bg-blue-500/30">
+          <style dangerouslySetInnerHTML={{__html: `
+            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+            .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+            ::-webkit-scrollbar { width: 4px; }
+            ::-webkit-scrollbar-track { background: #111827; }
+            ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+          `}} />
+
+          <div className="w-full max-w-md bg-gray-900 shadow-[0_0_30px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col h-screen relative mx-auto">
+            
+            {toastMsg && (
+              <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-gray-800 border border-gray-600 text-white px-4 py-3 rounded-lg shadow-2xl z-50 text-sm w-11/12 text-center animate-fade-in font-bold flex items-center justify-center gap-2">
+                <i className="fa-solid fa-circle-info text-blue-400"></i> {toastMsg}
+              </div>
+            )}
+
+            {gameState === 'title' && renderTitle()}
+            {gameState === 'slots_load' && renderSlots('load')}
+            {gameState === 'slots_save' && renderSlots('save')}
+            {gameState === 'slots_create' && renderSlots('create')}
+            {gameState === 'create' && renderCreate()}
+            {gameState === 'main' && renderMain()}
+            {gameState === 'infra' && renderInfra()}
+            {gameState === 'diplomacy' && renderDiplomacy()}
+            {gameState === 'map' && renderMap()}
+            {gameState === 'battle' && renderBattle()}
+            {gameState === 'shop' && renderShop()}
+            {gameState === 'skill' && renderSkillTree()}
+            {gameState === 'inventory' && renderInventory()}
+
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
